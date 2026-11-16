@@ -1,100 +1,86 @@
-# 👀 TabPeek — 1-Click Browser Context Bridge for AI Coding Tools
+# 👀 TabPeek
 
-**TabPeek** lets your local AI coding assistant (VS Code, Cursor, Claude Code, Windsurf) safely read your active browser tab and live console errors using the **Model Context Protocol (MCP)**.
+**Let your AI coding assistant see the browser tab you're looking at.**
 
-No API keys, no headless browser bots getting blocked by 2FA, and no messy copy-pasting.
+TabPeek is a Chrome extension plus a local [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server. Click **Let AI Peek** on any tab, and Claude Code, VS Code, Cursor, or any MCP client can read that page as clean Markdown, along with its live console errors and failed network requests.
 
----
+It works inside your real, logged-in browser, so there are no API keys, no headless bots, and no copy-pasting.
 
-## 🚀 The Problem It Solves
-
-AI coding tools are great at reading local code files, but they are completely blind to private pages open in your browser (such as AWS dashboards, Supabase tables, internal docs, or localhost web apps).
-
-**TabPeek fixes this in one click:**
-
-* **Bypasses Login Walls:** Works right inside your logged-in Chrome tab with zero extra logins or API keys needed.
-* **Strips HTML Junk:** Converts noisy DOM pages into clean Markdown using `Turndown` to save AI tokens.
-* **Catches Live Errors:** Automatically captures `console.error` logs and failed `fetch` network requests (`4xx` and `5xx`).
-* **Built-In Secret Masking:** Scrubs AWS keys (`AKIA...`), JWTs, and API tokens inside the browser before they ever reach the AI.
+[![Tests](https://github.com/minidu10/TabPeek/actions/workflows/test.yml/badge.svg)](https://github.com/minidu10/TabPeek/actions/workflows/test.yml)
 
 ---
 
-## 🏗️ System Architecture
+## Why
+
+AI coding tools can read your files but are blind to your browser: the localhost app you're debugging, an internal dashboard, a Supabase table, docs behind a login. TabPeek gives them a read-only window into **one tab you choose**.
+
+- **Works behind logins.** It reads the tab you already have open, so 2FA and SSO are not a problem.
+- **Saves tokens.** Pages are converted to compact Markdown. Scripts, styles, images, navigation, and icon-only links are stripped.
+- **Catches real errors.** Console errors, uncaught exceptions, unhandled promise rejections, and failed `fetch`/`XMLHttpRequest` calls, with stack traces.
+- **Hides secrets in the browser.** API keys and tokens are masked before anything leaves the page.
+- **Stays local.** Data goes from Chrome to a server on `127.0.0.1` and on to your editor. Nothing is sent to a third party.
+
+---
+
+## How it works
 
 ```text
-[Logged-In Chrome Tab] 
-       │  (1. Cleans HTML to Markdown & Masks Secrets)
-       ▼
-[TabPeek MV3 Extension] 
-       │  (2. Streams via Local WebSocket ws://localhost:54321)
-       ▼
-[Node.js MCP Bridge Server] 
-       │  (3. Exposes MCP Tools over stdio)
-       ▼
-[VS Code / Cursor / Claude Code]
+┌──────────────────────────┐
+│  Chrome tab you shared   │  page → Markdown, secrets masked, errors recorded
+└────────────┬─────────────┘
+             │ snapshot every 5 s
+             ▼
+┌──────────────────────────┐
+│  TabPeek extension (MV3) │  WebSocket client, reconnects automatically
+└────────────┬─────────────┘
+             │ ws://127.0.0.1:54321 (extension origins only)
+             ▼
+┌──────────────────────────┐
+│  TabPeek MCP server      │  validates messages, holds the latest snapshot
+└────────────┬─────────────┘
+             │ MCP over stdio
+             ▼
+┌──────────────────────────┐
+│  Claude Code / VS Code / │
+│  Cursor / any MCP client │
+└──────────────────────────┘
 ```
 
----
-
-## 📂 Project Folder Structure
-
-```text
-tabpeek/
-├── tabpeek-extension/       # Chrome Manifest V3 Extension
-│   ├── dist/
-│   │   └── content.js       # Bundled page cleaner & error catcher
-│   ├── background.js        # WebSocket client & keepalive worker
-│   ├── content.js           # Turndown HTML cleaner & secret masker
-│   ├── manifest.json        # Extension permissions & config
-│   ├── popup.html           # 1-click toggle UI
-│   └── popup.js             # Tab badge & script injection logic
-├── tabpeek-server/          # Local Node.js MCP Server
-│   ├── server.js            # WebSocket listener + MCP stdio tools
-│   └── package.json         # Server dependencies (ws, @modelcontextprotocol/sdk)
-├── .gitignore
-└── README.md
-```
+Your editor starts the MCP server. The extension connects to it and sends a fresh snapshot of the shared tab every 5 seconds. When you stop sharing, close the tab, or the extension disconnects, the server forgets the snapshot immediately.
 
 ---
 
-## 🛠️ Tech Stack
+## Quick start
 
-* **Browser Extension:** Chrome Manifest V3, JavaScript, Turndown, esbuild
-* **Local Data Pipe:** Node.js, WebSockets (`ws`)
-* **AI Protocol:** `@modelcontextprotocol/sdk` (MCP `stdio` transport), Zod
+Requires **Node.js 22+** and **Google Chrome** (or another Chromium browser).
 
----
-
-## ⚡ Quick Start Guide
-
-### Step 1: Set Up the Chrome Extension
-
-Open your terminal and bundle the extension script:
+### 1. Get the code and install the server
 
 ```bash
-cd tabpeek-extension
+git clone https://github.com/minidu10/TabPeek.git
+cd TabPeek/tabpeek-server
 npm install
-npx esbuild content.js --bundle --outfile=dist/content.js
 ```
 
-Load the extension into Chrome:
+### 2. Load the extension
 
-1. Open Chrome and go to `chrome://extensions`.
-2. Turn on **Developer mode** in the top right corner.
+1. Open `chrome://extensions`.
+2. Turn on **Developer mode** (top right).
 3. Click **Load unpacked** and select the `tabpeek-extension` folder.
 
-### Step 2: Set Up the MCP Server
+The extension ships with a prebuilt `dist/content.js`, so no build step is needed.
 
-Install the required packages inside the server folder:
+### 3. Connect your editor
+
+Use the full path to `tabpeek-server/server.js` on your machine.
+
+**Claude Code**
 
 ```bash
-cd ../tabpeek-server
-npm install
+claude mcp add tabpeek -- node /path/to/TabPeek/tabpeek-server/server.js
 ```
 
-### Step 3: Connect to VS Code (or Cursor)
-
-Create a `.vscode/mcp.json` file in your project and point it to your `server.js` file:
+**VS Code** — `.vscode/mcp.json` in your project:
 
 ```json
 {
@@ -102,29 +88,147 @@ Create a `.vscode/mcp.json` file in your project and point it to your `server.js
     "tabpeek": {
       "type": "stdio",
       "command": "node",
-      "args": ["C:/Users/ASUS/Desktop/tabpeek-server/server.js"]
+      "args": ["/path/to/TabPeek/tabpeek-server/server.js"]
     }
   }
 }
 ```
 
-Click **Start** right above `"tabpeek"` in `.vscode/mcp.json`, switch VS Code Chat to **Agent** mode, and ask:
+Click **Start** above `"tabpeek"`, then switch Copilot Chat to **Agent** mode.
 
-> *"Use TabPeek to read my active browser tab and check for any console errors."*
+**Cursor** — `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "tabpeek": {
+      "command": "node",
+      "args": ["/path/to/TabPeek/tabpeek-server/server.js"]
+    }
+  }
+}
+```
+
+### 4. Share a tab and ask
+
+Open the page, click the TabPeek icon, and press **Let AI Peek**. The icon shows a green **ON** badge. Then ask your assistant:
+
+> *"Use TabPeek to read my browser tab and check it for errors."*
+
+Press **Stop Peeking** at any time to stop sharing.
 
 ---
 
-## 🧰 Available MCP Tools
+## MCP tools
 
-| Tool Name | Description |
+| Tool | Returns |
 | :--- | :--- |
-| `peek_active_tab` | Returns the page title, URL, and clean Markdown text of the shared browser tab. |
-| `peek_tab_errors` | Returns the latest 20 console errors and failed network calls from the tab. |
+| `peek_active_tab` | Title, URL, and Markdown content of the shared tab (up to 15,000 characters). |
+| `peek_tab_errors` | The latest 20 errors from the shared tab, as JSON. |
+
+### Captured errors
+
+| Type | Source |
+| :--- | :--- |
+| `CONSOLE_ERROR` | `console.error(...)` calls, including `Error` stack traces |
+| `UNCAUGHT_ERROR` | Exceptions nobody caught |
+| `UNHANDLED_REJECTION` | Rejected promises with no handler |
+| `NETWORK_ERROR` | `fetch` and `XMLHttpRequest` calls that returned 4xx/5xx or failed to connect |
+
+Each entry has `type`, `message`, and an ISO `time`.
 
 ---
 
-## 🔒 Privacy & Security
+## Privacy and security
 
-* **Opt-In Per Tab:** Your AI can only see the single tab where you click **"Let AI Peek"**.
-* **100% Local Pipe:** All data stays on your machine over `ws://localhost:54321` with zero third-party cloud servers.
-* **Automatic Redaction:** Password inputs (`<input type="password">`), JWTs, AWS keys, and secret tokens are automatically replaced with `[HIDDEN_...]`.
+- **Opt-in, one tab at a time.** The AI only sees the tab where you pressed **Let AI Peek**. Sharing a new tab stops sharing the previous one.
+- **Read-only.** TabPeek never clicks, types, or navigates.
+- **Nothing left behind.** The server drops the snapshot as soon as you stop sharing, close the tab, or the extension disconnects.
+- **Websites can't connect.** The server listens only on `127.0.0.1` and rejects any WebSocket connection that doesn't come from a Chrome extension, so a page you visit can't feed fake content to your AI.
+- **Secrets are masked in the browser**, in page text, the title, the URL, and error messages:
+
+| Masked | Replaced with |
+| :--- | :--- |
+| JWTs (incl. Supabase tokens) | `[HIDDEN_JWT_TOKEN]` |
+| AWS access keys (`AKIA…`, `ASIA…`) | `[HIDDEN_AWS_KEY]` |
+| GitHub, OpenAI, Stripe, Slack, and Google API keys | `[HIDDEN_API_KEY]` |
+| `Bearer …` tokens | `Bearer [HIDDEN_TOKEN]` |
+| `token=`, `api_key=`, `secret=`, `password=`… in URLs | `[HIDDEN]` |
+
+Password inputs are removed before the page is converted.
+
+Masking is pattern-based. It catches common key formats, not every possible secret, so only share tabs you're comfortable showing your AI.
+
+### Lock the server to your extension
+
+By default the server accepts any Chrome extension. To accept only yours, copy its ID from `chrome://extensions` and set `TABPEEK_EXTENSION_ID`:
+
+```bash
+claude mcp add tabpeek -e TABPEEK_EXTENSION_ID=your_extension_id -- node /path/to/TabPeek/tabpeek-server/server.js
+```
+
+In VS Code or Cursor, add `"env": { "TABPEEK_EXTENSION_ID": "your_extension_id" }` to the server entry.
+
+---
+
+## Troubleshooting
+
+| Problem | Fix |
+| :--- | :--- |
+| AI says *"No tab is shared right now"* | Press **Let AI Peek** on the tab and make sure your editor has started the MCP server. The extension retries every 5 seconds, so the first snapshot can take a moment. |
+| Popup says *"TabPeek didn't respond"* | Reload the extension in `chrome://extensions`. |
+| Popup says *"Can't share this tab"* | Chrome blocks extensions on `chrome://` pages, the Chrome Web Store, and some other built-in pages. |
+| Server log says *"Port 54321 is already in use"* | Another TabPeek server is running. Close the other editor session or stop that process. |
+| Errors seem to be missing | Errors are recorded from the moment you press **Let AI Peek**, and again from the start of each reload. Reload the page after sharing to capture load-time errors. |
+
+To see the extension's own logs, click **service worker** on the TabPeek card in `chrome://extensions`.
+
+---
+
+## Development
+
+```text
+TabPeek/
+├── tabpeek-extension/          Chrome Manifest V3 extension
+│   ├── background.js           WebSocket client, sync loop, tab lifecycle
+│   ├── popup.html / popup.js   Share / stop button
+│   ├── content.js              Page script entry (bundled into dist/)
+│   ├── lib/
+│   │   ├── secrets.js          Secret masking
+│   │   ├── markdown.js         HTML → compact Markdown (Turndown)
+│   │   └── errors.js           console / fetch / XHR / uncaught error hooks
+│   ├── dist/content.js         Bundled page script (committed)
+│   ├── test/                   Unit tests
+│   └── manifest.json
+├── tabpeek-server/
+│   ├── server.js               WebSocket bridge + MCP stdio server
+│   └── test/                   Integration tests against the real server
+└── .github/workflows/test.yml  CI on Node 22 and 24
+```
+
+### Build the page script
+
+Rebuild `dist/content.js` after changing `content.js` or anything in `lib/`, then reload the extension:
+
+```bash
+cd tabpeek-extension
+npm install
+npm run build
+```
+
+### Run the tests
+
+```bash
+cd tabpeek-extension && npm install && npm test
+cd ../tabpeek-server && npm install && npm test
+```
+
+The server tests start `server.js` on spare ports through `TABPEEK_PORT`, so they can run while your normal TabPeek server is active. The extension always connects to port `54321`.
+
+---
+
+## Tech stack
+
+- **Extension:** Chrome Manifest V3, Turndown, esbuild
+- **Server:** Node.js, `ws`, `@modelcontextprotocol/sdk`, Zod
+- **Tests:** `node:test`, GitHub Actions
