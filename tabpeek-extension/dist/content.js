@@ -1,20 +1,33 @@
 (() => {
-  var __getOwnPropNames = Object.getOwnPropertyNames;
-  var __esm = (fn, res, err) => function __init() {
-    if (err) throw err[0];
-    try {
-      return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
-    } catch (e) {
-      throw err = [e], e;
+  // lib/secrets.js
+  var SECRET_PATTERNS = [
+    // JWTs and Supabase tokens (eyJ... header.payload.signature)
+    [/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[HIDDEN_JWT_TOKEN]"],
+    // AWS access keys (long-term AKIA, temporary ASIA)
+    [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, "[HIDDEN_AWS_KEY]"],
+    // GitHub, OpenAI, Anthropic, Stripe, and Slack keys
+    [
+      /\b(?:ghp_|gho_|ghs_|ghu_|github_pat_|sk-|sk_live_|sk_test_|rk_live_|rk_test_|pk_live_|xox[abprs]-)[A-Za-z0-9_-]{16,}/g,
+      "[HIDDEN_API_KEY]"
+    ],
+    // Google API keys
+    [/\bAIza[0-9A-Za-z_-]{35}\b/g, "[HIDDEN_API_KEY]"],
+    // Bearer tokens
+    [/(bearer\s+)[A-Za-z0-9\-._~+/]+=*/gi, "$1[HIDDEN_TOKEN]"],
+    // Secrets in URL query strings (?token=..., &api_key=...)
+    [
+      /([?&](?:access_token|refresh_token|id_token|token|api_key|apikey|key|secret|client_secret|password|signature|sig)=)[^&#\s)"']+/gi,
+      "$1[HIDDEN]"
+    ]
+  ];
+  function hideSecrets(text) {
+    if (!text) return "";
+    let result = String(text);
+    for (const [pattern, replacement] of SECRET_PATTERNS) {
+      result = result.replace(pattern, replacement);
     }
-  };
-  var __commonJS = (cb, mod) => function __require() {
-    try {
-      return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
-    } catch (e) {
-      throw mod = 0, e;
-    }
-  };
+    return result;
+  }
 
   // node_modules/turndown/lib/turndown.browser.es.js
   function extend(destination) {
@@ -40,15 +53,18 @@
   function trimNewlines(string) {
     return trimTrailingNewlines(trimLeadingNewlines(string));
   }
+  var blockElements = ["ADDRESS", "ARTICLE", "ASIDE", "AUDIO", "BLOCKQUOTE", "BODY", "CANVAS", "CENTER", "DD", "DIR", "DIV", "DL", "DT", "FIELDSET", "FIGCAPTION", "FIGURE", "FOOTER", "FORM", "FRAMESET", "H1", "H2", "H3", "H4", "H5", "H6", "HEADER", "HGROUP", "HR", "HTML", "ISINDEX", "LI", "MAIN", "MENU", "NAV", "NOFRAMES", "NOSCRIPT", "OL", "OUTPUT", "P", "PRE", "SECTION", "TABLE", "TBODY", "TD", "TFOOT", "TH", "THEAD", "TR", "UL"];
   function isBlock(node) {
     return is(node, blockElements);
   }
+  var voidElements = ["AREA", "BASE", "BR", "COL", "COMMAND", "EMBED", "HR", "IMG", "INPUT", "KEYGEN", "LINK", "META", "PARAM", "SOURCE", "TRACK", "WBR"];
   function isVoid(node) {
     return is(node, voidElements);
   }
   function hasVoid(node) {
     return has(node, voidElements);
   }
+  var meaningfulWhenBlankElements = ["A", "TABLE", "THEAD", "TBODY", "TFOOT", "TH", "TD", "IFRAME", "SCRIPT", "AUDIO", "VIDEO"];
   function isMeaningfulWhenBlank(node) {
     return is(node, meaningfulWhenBlankElements);
   }
@@ -63,11 +79,194 @@
       return node.getElementsByTagName(tagName).length;
     });
   }
+  var markdownEscapes = [[/\\/g, "\\\\"], [/\*/g, "\\*"], [/^-/g, "\\-"], [/^\+ /g, "\\+ "], [/^(=+)/g, "\\$1"], [/^(#{1,6}) /g, "\\$1 "], [/`/g, "\\`"], [/^~~~/g, "\\~~~"], [/\[/g, "\\["], [/\]/g, "\\]"], [/^>/g, "\\>"], [/_/g, "\\_"], [/^(\d+)\. /g, "$1\\. "]];
   function escapeMarkdown(string) {
     return markdownEscapes.reduce(function(accumulator, escape) {
       return accumulator.replace(escape[0], escape[1]);
     }, string);
   }
+  var rules = {};
+  rules.paragraph = {
+    filter: "p",
+    replacement: function(content) {
+      return "\n\n" + content + "\n\n";
+    }
+  };
+  rules.lineBreak = {
+    filter: "br",
+    replacement: function(content, node, options) {
+      return options.br + "\n";
+    }
+  };
+  rules.heading = {
+    filter: ["h1", "h2", "h3", "h4", "h5", "h6"],
+    replacement: function(content, node, options) {
+      var hLevel = Number(node.nodeName.charAt(1));
+      if (options.headingStyle === "setext" && hLevel < 3) {
+        var underline = repeat(hLevel === 1 ? "=" : "-", content.length);
+        return "\n\n" + content + "\n" + underline + "\n\n";
+      } else {
+        return "\n\n" + repeat("#", hLevel) + " " + content + "\n\n";
+      }
+    }
+  };
+  rules.blockquote = {
+    filter: "blockquote",
+    replacement: function(content) {
+      content = trimNewlines(content).replace(/^/gm, "> ");
+      return "\n\n" + content + "\n\n";
+    }
+  };
+  rules.list = {
+    filter: ["ul", "ol"],
+    replacement: function(content, node) {
+      var parent = node.parentNode;
+      if (parent.nodeName === "LI" && parent.lastElementChild === node) {
+        return "\n" + content;
+      } else {
+        return "\n\n" + content + "\n\n";
+      }
+    }
+  };
+  rules.listItem = {
+    filter: "li",
+    replacement: function(content, node, options) {
+      var prefix = options.bulletListMarker + "   ";
+      var parent = node.parentNode;
+      if (parent.nodeName === "OL") {
+        var start = parent.getAttribute("start");
+        var index = Array.prototype.indexOf.call(parent.children, node);
+        prefix = (start ? Number(start) + index : index + 1) + ".  ";
+      }
+      var isParagraph = /\n$/.test(content);
+      content = trimNewlines(content) + (isParagraph ? "\n" : "");
+      content = content.replace(/\n/gm, "\n" + " ".repeat(prefix.length));
+      return prefix + content + (node.nextSibling ? "\n" : "");
+    }
+  };
+  rules.indentedCodeBlock = {
+    filter: function(node, options) {
+      return options.codeBlockStyle === "indented" && node.nodeName === "PRE" && node.firstChild && node.firstChild.nodeName === "CODE";
+    },
+    replacement: function(content, node, options) {
+      return "\n\n    " + node.firstChild.textContent.replace(/\n/g, "\n    ") + "\n\n";
+    }
+  };
+  rules.fencedCodeBlock = {
+    filter: function(node, options) {
+      return options.codeBlockStyle === "fenced" && node.nodeName === "PRE" && node.firstChild && node.firstChild.nodeName === "CODE";
+    },
+    replacement: function(content, node, options) {
+      var className = node.firstChild.getAttribute("class") || "";
+      var language = (className.match(/language-(\S+)/) || [null, ""])[1];
+      var code = node.firstChild.textContent;
+      var fenceChar = options.fence.charAt(0);
+      var fenceSize = 3;
+      var fenceInCodeRegex = new RegExp("^" + fenceChar + "{3,}", "gm");
+      var match;
+      while (match = fenceInCodeRegex.exec(code)) {
+        if (match[0].length >= fenceSize) {
+          fenceSize = match[0].length + 1;
+        }
+      }
+      var fence = repeat(fenceChar, fenceSize);
+      return "\n\n" + fence + language + "\n" + code.replace(/\n$/, "") + "\n" + fence + "\n\n";
+    }
+  };
+  rules.horizontalRule = {
+    filter: "hr",
+    replacement: function(content, node, options) {
+      return "\n\n" + options.hr + "\n\n";
+    }
+  };
+  rules.inlineLink = {
+    filter: function(node, options) {
+      return options.linkStyle === "inlined" && node.nodeName === "A" && node.getAttribute("href");
+    },
+    replacement: function(content, node) {
+      var href = escapeLinkDestination(node.getAttribute("href"));
+      var title = escapeLinkTitle(cleanAttribute(node.getAttribute("title")));
+      var titlePart = title ? ' "' + title + '"' : "";
+      return "[" + content + "](" + href + titlePart + ")";
+    }
+  };
+  rules.referenceLink = {
+    filter: function(node, options) {
+      return options.linkStyle === "referenced" && node.nodeName === "A" && node.getAttribute("href");
+    },
+    replacement: function(content, node, options) {
+      var href = escapeLinkDestination(node.getAttribute("href"));
+      var title = cleanAttribute(node.getAttribute("title"));
+      if (title) title = ' "' + escapeLinkTitle(title) + '"';
+      var replacement;
+      var reference;
+      switch (options.linkReferenceStyle) {
+        case "collapsed":
+          replacement = "[" + content + "][]";
+          reference = "[" + content + "]: " + href + title;
+          break;
+        case "shortcut":
+          replacement = "[" + content + "]";
+          reference = "[" + content + "]: " + href + title;
+          break;
+        default:
+          var id = this.references.length + 1;
+          replacement = "[" + content + "][" + id + "]";
+          reference = "[" + id + "]: " + href + title;
+      }
+      this.references.push(reference);
+      return replacement;
+    },
+    references: [],
+    append: function(options) {
+      var references = "";
+      if (this.references.length) {
+        references = "\n\n" + this.references.join("\n") + "\n\n";
+        this.references = [];
+      }
+      return references;
+    }
+  };
+  rules.emphasis = {
+    filter: ["em", "i"],
+    replacement: function(content, node, options) {
+      if (!content.trim()) return "";
+      return options.emDelimiter + content + options.emDelimiter;
+    }
+  };
+  rules.strong = {
+    filter: ["strong", "b"],
+    replacement: function(content, node, options) {
+      if (!content.trim()) return "";
+      return options.strongDelimiter + content + options.strongDelimiter;
+    }
+  };
+  rules.code = {
+    filter: function(node) {
+      var hasSiblings = node.previousSibling || node.nextSibling;
+      var isCodeBlock = node.parentNode.nodeName === "PRE" && !hasSiblings;
+      return node.nodeName === "CODE" && !isCodeBlock;
+    },
+    replacement: function(content) {
+      if (!content) return "";
+      content = content.replace(/\r?\n|\r/g, " ");
+      var extraSpace = /^`|^ .*?[^ ].* $|`$/.test(content) ? " " : "";
+      var delimiter = "`";
+      var matches = content.match(/`+/gm) || [];
+      while (matches.indexOf(delimiter) !== -1) delimiter = delimiter + "`";
+      return delimiter + extraSpace + content + extraSpace + delimiter;
+    }
+  };
+  rules.image = {
+    filter: "img",
+    replacement: function(content, node) {
+      var alt = escapeMarkdown(cleanAttribute(node.getAttribute("alt")));
+      var src = escapeLinkDestination(node.getAttribute("src") || "");
+      var title = cleanAttribute(node.getAttribute("title"));
+      var titlePart = title ? ' "' + escapeLinkTitle(title) + '"' : "";
+      return src ? "![" + alt + "](" + src + titlePart + ")" : "";
+    }
+  };
   function cleanAttribute(attribute) {
     return attribute ? attribute.replace(/(\n+\s*)+/g, "\n") : "";
   }
@@ -92,6 +291,36 @@
     this.array = [];
     for (var key in options.rules) this.array.push(options.rules[key]);
   }
+  Rules.prototype = {
+    add: function(key, rule) {
+      this.array.unshift(rule);
+    },
+    keep: function(filter) {
+      this._keep.unshift({
+        filter,
+        replacement: this.keepReplacement
+      });
+    },
+    remove: function(filter) {
+      this._remove.unshift({
+        filter,
+        replacement: function() {
+          return "";
+        }
+      });
+    },
+    forNode: function(node) {
+      if (node.isBlank) return this.blankRule;
+      var rule;
+      if (rule = findRule(this.array, node, this.options)) return rule;
+      if (rule = findRule(this._keep, node, this.options)) return rule;
+      if (rule = findRule(this._remove, node, this.options)) return rule;
+      return this.defaultRule;
+    },
+    forEach: function(fn) {
+      for (var i = 0; i < this.array.length; i++) fn(this.array[i], i);
+    }
+  };
   function findRule(rules2, node, options) {
     for (var i = 0; i < rules2.length; i++) {
       var rule = rules2[i];
@@ -174,6 +403,7 @@
     }
     return current.firstChild || current.nextSibling || current.parentNode;
   }
+  var root = typeof window !== "undefined" ? window : {};
   function canParseHTMLNatively() {
     var Parser = root.DOMParser;
     var canParse = false;
@@ -219,6 +449,7 @@
     }
     return useActiveX;
   }
+  var HTMLParser = canParseHTMLNatively() ? root.DOMParser : createHTMLParser();
   function RootNode(input, options) {
     var root2;
     if (typeof input === "string") {
@@ -241,6 +472,7 @@
     });
     return root2;
   }
+  var _htmlParser;
   function htmlParser() {
     _htmlParser = _htmlParser || new HTMLParser();
     return _htmlParser;
@@ -312,6 +544,7 @@
     }
     return isFlanked;
   }
+  var reduce = Array.prototype.reduce;
   function TurndownService(options) {
     if (!(this instanceof TurndownService)) return new TurndownService(options);
     var defaults = {
@@ -340,6 +573,84 @@
     this.options = extend({}, defaults, options);
     this.rules = new Rules(this.options);
   }
+  TurndownService.prototype = {
+    /**
+     * The entry point for converting a string or DOM node to Markdown
+     * @public
+     * @param {String|HTMLElement} input The string or DOM node to convert
+     * @returns A Markdown representation of the input
+     * @type String
+     */
+    turndown: function(input) {
+      if (!canConvert(input)) {
+        throw new TypeError(input + " is not a string, or an element/document/fragment node.");
+      }
+      if (input === "") return "";
+      var output = process.call(this, new RootNode(input, this.options));
+      return postProcess.call(this, output);
+    },
+    /**
+     * Add one or more plugins
+     * @public
+     * @param {Function|Array} plugin The plugin or array of plugins to add
+     * @returns The Turndown instance for chaining
+     * @type Object
+     */
+    use: function(plugin) {
+      if (Array.isArray(plugin)) {
+        for (var i = 0; i < plugin.length; i++) this.use(plugin[i]);
+      } else if (typeof plugin === "function") {
+        plugin(this);
+      } else {
+        throw new TypeError("plugin must be a Function or an Array of Functions");
+      }
+      return this;
+    },
+    /**
+     * Adds a rule
+     * @public
+     * @param {String} key The unique key of the rule
+     * @param {Object} rule The rule
+     * @returns The Turndown instance for chaining
+     * @type Object
+     */
+    addRule: function(key, rule) {
+      this.rules.add(key, rule);
+      return this;
+    },
+    /**
+     * Keep a node (as HTML) that matches the filter
+     * @public
+     * @param {String|Array|Function} filter The unique key of the rule
+     * @returns The Turndown instance for chaining
+     * @type Object
+     */
+    keep: function(filter) {
+      this.rules.keep(filter);
+      return this;
+    },
+    /**
+     * Remove a node that matches the filter
+     * @public
+     * @param {String|Array|Function} filter The unique key of the rule
+     * @returns The Turndown instance for chaining
+     * @type Object
+     */
+    remove: function(filter) {
+      this.rules.remove(filter);
+      return this;
+    },
+    /**
+     * Escapes Markdown syntax
+     * @public
+     * @param {String} string The string to escape
+     * @returns A string with Markdown syntax escaped
+     * @type String
+     */
+    escape: function(string) {
+      return escapeMarkdown(string);
+    }
+  };
   function process(parentNode) {
     var self = this;
     return reduce.call(parentNode.childNodes, function(output, node) {
@@ -383,364 +694,138 @@
   function canConvert(input) {
     return input != null && (typeof input === "string" || input.nodeType && (input.nodeType === 1 || input.nodeType === 9 || input.nodeType === 11));
   }
-  var blockElements, voidElements, meaningfulWhenBlankElements, markdownEscapes, rules, root, HTMLParser, _htmlParser, reduce;
-  var init_turndown_browser_es = __esm({
-    "node_modules/turndown/lib/turndown.browser.es.js"() {
-      blockElements = ["ADDRESS", "ARTICLE", "ASIDE", "AUDIO", "BLOCKQUOTE", "BODY", "CANVAS", "CENTER", "DD", "DIR", "DIV", "DL", "DT", "FIELDSET", "FIGCAPTION", "FIGURE", "FOOTER", "FORM", "FRAMESET", "H1", "H2", "H3", "H4", "H5", "H6", "HEADER", "HGROUP", "HR", "HTML", "ISINDEX", "LI", "MAIN", "MENU", "NAV", "NOFRAMES", "NOSCRIPT", "OL", "OUTPUT", "P", "PRE", "SECTION", "TABLE", "TBODY", "TD", "TFOOT", "TH", "THEAD", "TR", "UL"];
-      voidElements = ["AREA", "BASE", "BR", "COL", "COMMAND", "EMBED", "HR", "IMG", "INPUT", "KEYGEN", "LINK", "META", "PARAM", "SOURCE", "TRACK", "WBR"];
-      meaningfulWhenBlankElements = ["A", "TABLE", "THEAD", "TBODY", "TFOOT", "TH", "TD", "IFRAME", "SCRIPT", "AUDIO", "VIDEO"];
-      markdownEscapes = [[/\\/g, "\\\\"], [/\*/g, "\\*"], [/^-/g, "\\-"], [/^\+ /g, "\\+ "], [/^(=+)/g, "\\$1"], [/^(#{1,6}) /g, "\\$1 "], [/`/g, "\\`"], [/^~~~/g, "\\~~~"], [/\[/g, "\\["], [/\]/g, "\\]"], [/^>/g, "\\>"], [/_/g, "\\_"], [/^(\d+)\. /g, "$1\\. "]];
-      rules = {};
-      rules.paragraph = {
-        filter: "p",
-        replacement: function(content) {
-          return "\n\n" + content + "\n\n";
+
+  // lib/markdown.js
+  var MAX_MARKDOWN_LENGTH = 15e3;
+  function createTurndown() {
+    const turndown = new TurndownService({
+      headingStyle: "atx",
+      codeBlockStyle: "fenced",
+      bulletListMarker: "-"
+    });
+    turndown.addRule("compactLinks", {
+      filter: (node) => node.nodeName === "A" && node.getAttribute("href"),
+      replacement: (content, node) => {
+        const text = content.replace(/\s+/g, " ").trim();
+        if (!text) return "";
+        return `[${text}](${node.getAttribute("href")})`;
+      }
+    });
+    return turndown;
+  }
+  function cleanMarkdown(markdown) {
+    return markdown.split("\n").map((line) => line.replace(/\s+$/, "")).join("\n").replace(/^([-*]|\d+\.)\s{2,}/gm, "$1 ").replace(/\n{3,}/g, "\n\n").trim();
+  }
+  function htmlToMarkdown(html) {
+    return cleanMarkdown(createTurndown().turndown(html));
+  }
+
+  // lib/errors.js
+  var MAX_ERRORS = 20;
+  var MAX_MESSAGE_LENGTH = 2e3;
+  function formatArg(arg) {
+    if (arg instanceof Error) return arg.stack || `${arg.name}: ${arg.message}`;
+    if (arg && typeof arg === "object") {
+      try {
+        return JSON.stringify(arg);
+      } catch {
+        return String(arg);
+      }
+    }
+    return String(arg);
+  }
+  function requestUrl(input) {
+    if (typeof input === "string") return input;
+    return input?.url ?? String(input);
+  }
+  function installErrorHooks(win) {
+    win.__tabPeekErrors = win.__tabPeekErrors || [];
+    if (win.__tabPeekHooked) return win.__tabPeekErrors;
+    win.__tabPeekHooked = true;
+    const errors = win.__tabPeekErrors;
+    function save(type, message) {
+      errors.push({
+        type,
+        message: hideSecrets(String(message)).slice(0, MAX_MESSAGE_LENGTH),
+        time: (/* @__PURE__ */ new Date()).toISOString()
+      });
+      if (errors.length > MAX_ERRORS) errors.shift();
+    }
+    const originalConsoleError = win.console.error;
+    win.console.error = function(...args) {
+      save("CONSOLE_ERROR", args.map(formatArg).join(" "));
+      return originalConsoleError.apply(this, args);
+    };
+    if (typeof win.fetch === "function") {
+      const originalFetch = win.fetch;
+      win.fetch = async function(...args) {
+        let response;
+        try {
+          response = await originalFetch.apply(this, args);
+        } catch (err) {
+          save("NETWORK_ERROR", `fetch failed: ${requestUrl(args[0])} (${err?.message ?? err})`);
+          throw err;
         }
-      };
-      rules.lineBreak = {
-        filter: "br",
-        replacement: function(content, node, options) {
-          return options.br + "\n";
+        if (!response.ok) {
+          save(
+            "NETWORK_ERROR",
+            `${response.status} ${response.statusText} at ${response.url || requestUrl(args[0])}`
+          );
         }
-      };
-      rules.heading = {
-        filter: ["h1", "h2", "h3", "h4", "h5", "h6"],
-        replacement: function(content, node, options) {
-          var hLevel = Number(node.nodeName.charAt(1));
-          if (options.headingStyle === "setext" && hLevel < 3) {
-            var underline = repeat(hLevel === 1 ? "=" : "-", content.length);
-            return "\n\n" + content + "\n" + underline + "\n\n";
-          } else {
-            return "\n\n" + repeat("#", hLevel) + " " + content + "\n\n";
-          }
-        }
-      };
-      rules.blockquote = {
-        filter: "blockquote",
-        replacement: function(content) {
-          content = trimNewlines(content).replace(/^/gm, "> ");
-          return "\n\n" + content + "\n\n";
-        }
-      };
-      rules.list = {
-        filter: ["ul", "ol"],
-        replacement: function(content, node) {
-          var parent = node.parentNode;
-          if (parent.nodeName === "LI" && parent.lastElementChild === node) {
-            return "\n" + content;
-          } else {
-            return "\n\n" + content + "\n\n";
-          }
-        }
-      };
-      rules.listItem = {
-        filter: "li",
-        replacement: function(content, node, options) {
-          var prefix = options.bulletListMarker + "   ";
-          var parent = node.parentNode;
-          if (parent.nodeName === "OL") {
-            var start = parent.getAttribute("start");
-            var index = Array.prototype.indexOf.call(parent.children, node);
-            prefix = (start ? Number(start) + index : index + 1) + ".  ";
-          }
-          var isParagraph = /\n$/.test(content);
-          content = trimNewlines(content) + (isParagraph ? "\n" : "");
-          content = content.replace(/\n/gm, "\n" + " ".repeat(prefix.length));
-          return prefix + content + (node.nextSibling ? "\n" : "");
-        }
-      };
-      rules.indentedCodeBlock = {
-        filter: function(node, options) {
-          return options.codeBlockStyle === "indented" && node.nodeName === "PRE" && node.firstChild && node.firstChild.nodeName === "CODE";
-        },
-        replacement: function(content, node, options) {
-          return "\n\n    " + node.firstChild.textContent.replace(/\n/g, "\n    ") + "\n\n";
-        }
-      };
-      rules.fencedCodeBlock = {
-        filter: function(node, options) {
-          return options.codeBlockStyle === "fenced" && node.nodeName === "PRE" && node.firstChild && node.firstChild.nodeName === "CODE";
-        },
-        replacement: function(content, node, options) {
-          var className = node.firstChild.getAttribute("class") || "";
-          var language = (className.match(/language-(\S+)/) || [null, ""])[1];
-          var code = node.firstChild.textContent;
-          var fenceChar = options.fence.charAt(0);
-          var fenceSize = 3;
-          var fenceInCodeRegex = new RegExp("^" + fenceChar + "{3,}", "gm");
-          var match;
-          while (match = fenceInCodeRegex.exec(code)) {
-            if (match[0].length >= fenceSize) {
-              fenceSize = match[0].length + 1;
-            }
-          }
-          var fence = repeat(fenceChar, fenceSize);
-          return "\n\n" + fence + language + "\n" + code.replace(/\n$/, "") + "\n" + fence + "\n\n";
-        }
-      };
-      rules.horizontalRule = {
-        filter: "hr",
-        replacement: function(content, node, options) {
-          return "\n\n" + options.hr + "\n\n";
-        }
-      };
-      rules.inlineLink = {
-        filter: function(node, options) {
-          return options.linkStyle === "inlined" && node.nodeName === "A" && node.getAttribute("href");
-        },
-        replacement: function(content, node) {
-          var href = escapeLinkDestination(node.getAttribute("href"));
-          var title = escapeLinkTitle(cleanAttribute(node.getAttribute("title")));
-          var titlePart = title ? ' "' + title + '"' : "";
-          return "[" + content + "](" + href + titlePart + ")";
-        }
-      };
-      rules.referenceLink = {
-        filter: function(node, options) {
-          return options.linkStyle === "referenced" && node.nodeName === "A" && node.getAttribute("href");
-        },
-        replacement: function(content, node, options) {
-          var href = escapeLinkDestination(node.getAttribute("href"));
-          var title = cleanAttribute(node.getAttribute("title"));
-          if (title) title = ' "' + escapeLinkTitle(title) + '"';
-          var replacement;
-          var reference;
-          switch (options.linkReferenceStyle) {
-            case "collapsed":
-              replacement = "[" + content + "][]";
-              reference = "[" + content + "]: " + href + title;
-              break;
-            case "shortcut":
-              replacement = "[" + content + "]";
-              reference = "[" + content + "]: " + href + title;
-              break;
-            default:
-              var id = this.references.length + 1;
-              replacement = "[" + content + "][" + id + "]";
-              reference = "[" + id + "]: " + href + title;
-          }
-          this.references.push(reference);
-          return replacement;
-        },
-        references: [],
-        append: function(options) {
-          var references = "";
-          if (this.references.length) {
-            references = "\n\n" + this.references.join("\n") + "\n\n";
-            this.references = [];
-          }
-          return references;
-        }
-      };
-      rules.emphasis = {
-        filter: ["em", "i"],
-        replacement: function(content, node, options) {
-          if (!content.trim()) return "";
-          return options.emDelimiter + content + options.emDelimiter;
-        }
-      };
-      rules.strong = {
-        filter: ["strong", "b"],
-        replacement: function(content, node, options) {
-          if (!content.trim()) return "";
-          return options.strongDelimiter + content + options.strongDelimiter;
-        }
-      };
-      rules.code = {
-        filter: function(node) {
-          var hasSiblings = node.previousSibling || node.nextSibling;
-          var isCodeBlock = node.parentNode.nodeName === "PRE" && !hasSiblings;
-          return node.nodeName === "CODE" && !isCodeBlock;
-        },
-        replacement: function(content) {
-          if (!content) return "";
-          content = content.replace(/\r?\n|\r/g, " ");
-          var extraSpace = /^`|^ .*?[^ ].* $|`$/.test(content) ? " " : "";
-          var delimiter = "`";
-          var matches = content.match(/`+/gm) || [];
-          while (matches.indexOf(delimiter) !== -1) delimiter = delimiter + "`";
-          return delimiter + extraSpace + content + extraSpace + delimiter;
-        }
-      };
-      rules.image = {
-        filter: "img",
-        replacement: function(content, node) {
-          var alt = escapeMarkdown(cleanAttribute(node.getAttribute("alt")));
-          var src = escapeLinkDestination(node.getAttribute("src") || "");
-          var title = cleanAttribute(node.getAttribute("title"));
-          var titlePart = title ? ' "' + escapeLinkTitle(title) + '"' : "";
-          return src ? "![" + alt + "](" + src + titlePart + ")" : "";
-        }
-      };
-      Rules.prototype = {
-        add: function(key, rule) {
-          this.array.unshift(rule);
-        },
-        keep: function(filter) {
-          this._keep.unshift({
-            filter,
-            replacement: this.keepReplacement
-          });
-        },
-        remove: function(filter) {
-          this._remove.unshift({
-            filter,
-            replacement: function() {
-              return "";
-            }
-          });
-        },
-        forNode: function(node) {
-          if (node.isBlank) return this.blankRule;
-          var rule;
-          if (rule = findRule(this.array, node, this.options)) return rule;
-          if (rule = findRule(this._keep, node, this.options)) return rule;
-          if (rule = findRule(this._remove, node, this.options)) return rule;
-          return this.defaultRule;
-        },
-        forEach: function(fn) {
-          for (var i = 0; i < this.array.length; i++) fn(this.array[i], i);
-        }
-      };
-      root = typeof window !== "undefined" ? window : {};
-      HTMLParser = canParseHTMLNatively() ? root.DOMParser : createHTMLParser();
-      reduce = Array.prototype.reduce;
-      TurndownService.prototype = {
-        /**
-         * The entry point for converting a string or DOM node to Markdown
-         * @public
-         * @param {String|HTMLElement} input The string or DOM node to convert
-         * @returns A Markdown representation of the input
-         * @type String
-         */
-        turndown: function(input) {
-          if (!canConvert(input)) {
-            throw new TypeError(input + " is not a string, or an element/document/fragment node.");
-          }
-          if (input === "") return "";
-          var output = process.call(this, new RootNode(input, this.options));
-          return postProcess.call(this, output);
-        },
-        /**
-         * Add one or more plugins
-         * @public
-         * @param {Function|Array} plugin The plugin or array of plugins to add
-         * @returns The Turndown instance for chaining
-         * @type Object
-         */
-        use: function(plugin) {
-          if (Array.isArray(plugin)) {
-            for (var i = 0; i < plugin.length; i++) this.use(plugin[i]);
-          } else if (typeof plugin === "function") {
-            plugin(this);
-          } else {
-            throw new TypeError("plugin must be a Function or an Array of Functions");
-          }
-          return this;
-        },
-        /**
-         * Adds a rule
-         * @public
-         * @param {String} key The unique key of the rule
-         * @param {Object} rule The rule
-         * @returns The Turndown instance for chaining
-         * @type Object
-         */
-        addRule: function(key, rule) {
-          this.rules.add(key, rule);
-          return this;
-        },
-        /**
-         * Keep a node (as HTML) that matches the filter
-         * @public
-         * @param {String|Array|Function} filter The unique key of the rule
-         * @returns The Turndown instance for chaining
-         * @type Object
-         */
-        keep: function(filter) {
-          this.rules.keep(filter);
-          return this;
-        },
-        /**
-         * Remove a node that matches the filter
-         * @public
-         * @param {String|Array|Function} filter The unique key of the rule
-         * @returns The Turndown instance for chaining
-         * @type Object
-         */
-        remove: function(filter) {
-          this.rules.remove(filter);
-          return this;
-        },
-        /**
-         * Escapes Markdown syntax
-         * @public
-         * @param {String} string The string to escape
-         * @returns A string with Markdown syntax escaped
-         * @type String
-         */
-        escape: function(string) {
-          return escapeMarkdown(string);
-        }
+        return response;
       };
     }
-  });
+    const XHR = win.XMLHttpRequest;
+    if (XHR?.prototype) {
+      const originalOpen = XHR.prototype.open;
+      const originalSend = XHR.prototype.send;
+      XHR.prototype.open = function(method, url, ...rest) {
+        this.__tabPeekRequest = { method: String(method).toUpperCase(), url: String(url) };
+        return originalOpen.call(this, method, url, ...rest);
+      };
+      XHR.prototype.send = function(...args) {
+        const { method, url } = this.__tabPeekRequest || { method: "GET", url: "(unknown)" };
+        this.addEventListener("load", () => {
+          if (this.status >= 400) {
+            save(
+              "NETWORK_ERROR",
+              `${this.status} ${this.statusText} at ${this.responseURL || url} (XHR ${method})`
+            );
+          }
+        });
+        this.addEventListener("error", () => {
+          save("NETWORK_ERROR", `XHR ${method} ${url} failed (network error)`);
+        });
+        return originalSend.apply(this, args);
+      };
+    }
+    win.addEventListener("error", (event) => {
+      save(
+        "UNCAUGHT_ERROR",
+        event.error?.stack || `${event.message} at ${event.filename}:${event.lineno}:${event.colno}`
+      );
+    });
+    win.addEventListener("unhandledrejection", (event) => {
+      save("UNHANDLED_REJECTION", formatArg(event.reason));
+    });
+    return errors;
+  }
 
   // content.js
-  var require_content = __commonJS({
-    "content.js"() {
-      init_turndown_browser_es();
-      function hideSecrets(text) {
-        if (!text) return "";
-        return text.replace(/eyJ[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+/g, "[HIDDEN_JWT_TOKEN]").replace(/AKIA[0-9A-Z]{16}/g, "[HIDDEN_AWS_KEY]").replace(/\b(ghp_|sk-|rk_live_|pk_live_)[A-Za-z0-9_\-]{16,}\b/g, "[HIDDEN_API_KEY]").replace(/(bearer\s+)[A-Za-z0-9\-._~+/]+=*/gi, "$1[HIDDEN_TOKEN]");
-      }
-      function grabCleanPageMarkdown() {
-        const clone = document.body.cloneNode(true);
-        const junkSelectors = "script, style, noscript, svg, img, header, nav, footer, iframe, input[type='password']";
-        clone.querySelectorAll(junkSelectors).forEach((el) => el.remove());
-        const turndownService = new TurndownService({
-          headingStyle: "atx",
-          codeBlockStyle: "fenced"
-        });
-        const rawMarkdown = turndownService.turndown(clone.innerHTML);
-        return {
-          title: document.title,
-          url: window.location.href,
-          markdown: hideSecrets(rawMarkdown.slice(0, 15e3))
-        };
-      }
-      window.__tabPeekErrors = window.__tabPeekErrors || [];
-      function saveError(type, message) {
-        window.__tabPeekErrors.push({
-          type,
-          message: hideSecrets(message),
-          time: (/* @__PURE__ */ new Date()).toISOString()
-        });
-        if (window.__tabPeekErrors.length > 20) {
-          window.__tabPeekErrors.shift();
-        }
-      }
-      if (!window.__tabPeekHooked) {
-        window.__tabPeekHooked = true;
-        const originalConsoleError = console.error;
-        console.error = (...args) => {
-          saveError("CONSOLE_ERROR", args.map(String).join(" "));
-          originalConsoleError.apply(console, args);
-        };
-        const originalFetch = window.fetch;
-        window.fetch = async (...args) => {
-          const response = await originalFetch(...args);
-          if (!response.ok) {
-            saveError("NETWORK_ERROR", `${response.status} ${response.statusText} at ${response.url}`);
-          }
-          return response;
-        };
-      }
-      window.__getTabPeekPayload = () => ({
-        ...grabCleanPageMarkdown(),
-        errors: window.__tabPeekErrors
-      });
-    }
+  var JUNK_SELECTORS = "script, style, noscript, svg, img, header, nav, footer, iframe, input[type='password']";
+  function grabCleanPageMarkdown() {
+    const clone = document.body.cloneNode(true);
+    clone.querySelectorAll(JUNK_SELECTORS).forEach((el) => el.remove());
+    const markdown = hideSecrets(htmlToMarkdown(clone.innerHTML)).slice(0, MAX_MARKDOWN_LENGTH);
+    return {
+      title: hideSecrets(document.title),
+      url: hideSecrets(window.location.href),
+      markdown
+    };
+  }
+  installErrorHooks(window);
+  window.__getTabPeekPayload = () => ({
+    ...grabCleanPageMarkdown(),
+    errors: [...window.__tabPeekErrors]
   });
-  require_content();
 })();
