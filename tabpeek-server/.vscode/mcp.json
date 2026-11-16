@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "tabpeek": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["C:/Users/ASUS/Desktop/tabpeek-server/server.js"]
+    }
+  }
+}
