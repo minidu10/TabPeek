@@ -3,7 +3,8 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
-const PORT = 54321;
+// The extension always connects to 54321; TABPEEK_PORT exists for tests.
+const PORT = Number(process.env.TABPEEK_PORT) || 54321;
 // Optional: pin the server to your own extension ID (see chrome://extensions).
 // When unset, any Chrome extension origin is accepted, but web pages are not.
 const ALLOWED_EXTENSION_ID = process.env.TABPEEK_EXTENSION_ID;

@@ -4,7 +4,8 @@
   "private": true,
   "description": "Chrome extension that lets local AI tools peek at a shared browser tab.",
   "scripts": {
-    "build": "esbuild content.js --bundle --outfile=dist/content.js"
+    "build": "esbuild content.js --bundle --outfile=dist/content.js",
+    "test": "node --test"
   },
   "license": "ISC",
   "dependencies": {
@@ -12,5 +13,6 @@
   },
   "devDependencies": {
     "esbuild": "^0.28.2"
-  }
+  },
+  "type": "module"
 }
