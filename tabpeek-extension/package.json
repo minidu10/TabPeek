@@ -1,0 +1,16 @@
+{
+  "name": "tabpeek-extension",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Chrome extension that lets local AI tools peek at a shared browser tab.",
+  "scripts": {
+    "build": "esbuild content.js --bundle --outfile=dist/content.js"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "turndown": "^7.2.5"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

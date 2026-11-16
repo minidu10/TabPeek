@@ -13,32 +13,37 @@ function setUI(isPeeking) {
   }
 }
 
-// Check if this tab is already ON when the popup opens
-chrome.tabs.query({ active: true, currentWindow: true }, async ([tab]) => {
-  const badge = await chrome.action.getBadgeText({ tabId: tab.id });
-  setUI(badge === "ON");
-});
+async function getState() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const { activeTabId } = await chrome.storage.session.get("activeTabId");
+  return { tab, isPeeking: activeTabId === tab.id };
+}
+
+// Show whether this tab is already shared when the popup opens
+getState().then(({ isPeeking }) => setUI(isPeeking));
 
 btn.addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const currentBadge = await chrome.action.getBadgeText({ tabId: tab.id });
-  const isPeeking = currentBadge !== "ON";
+  const { tab, isPeeking } = await getState();
 
-  if (isPeeking) {
-    chrome.action.setBadgeText({ tabId: tab.id, text: "ON" });
-    chrome.action.setBadgeBackgroundColor({ tabId: tab.id, color: "#10b981" });
-    setUI(true);
-
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      world: "MAIN",
-      files: ["dist/content.js"]
+  btn.disabled = true;
+  let response;
+  try {
+    response = await chrome.runtime.sendMessage({
+      action: isPeeking ? "STOP_PEEK" : "START_PEEK",
+      tabId: tab.id
     });
-
-    chrome.runtime.sendMessage({ action: "START_PEEK", tabId: tab.id });
-  } else {
-    chrome.action.setBadgeText({ tabId: tab.id, text: "" });
-    setUI(false);
-    chrome.runtime.sendMessage({ action: "STOP_PEEK" });
+  } catch (err) {
+    response = { ok: false, error: err.message };
   }
+  btn.disabled = false;
+
+  if (!response?.ok) {
+    setUI(isPeeking);
+    statusText.textContent = response
+      ? `Can't share this tab: ${response.error}`
+      : "TabPeek didn't respond. Reload the extension in chrome://extensions and try again.";
+    return;
+  }
+
+  setUI(!isPeeking);
 });
